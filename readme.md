@@ -1,0 +1,180 @@
+
+# A CQRS IRepository with EF Core
+
+Chances are the only reason you clicked on this article was to scroll right
+to the comments so you can call me an idiot. "`DbSet` IS a repository!" you
+are here to tell me. Well yes. But maybe, just maybe, we can have a bit of a better
+repository. We'll leave all the functionality on the existing `DbSet` and
+expose it direction. Our main work will be wrapping up our `DbContext`
+
+## Setting Up A Useless Repository
+
+Our basic querying interface will look like this
+
+```c#
+public interface IRepository<TContext> where TContext : DbContext
+{
+    IQueryable<T> Query<T>() where T : class;
+}
+```
+
+Because `DbSet` is the repository pattern we just need to expose it.
+
+```c#
+public class Repository<TContext> : IRepository<TContext> where TContext : DbContext
+{
+    private readonly TContext _context;
+
+    public Repository(TContext context) => _context = context;
+    public IQueryable<T> Query<T>() where T : class => _context.Set<T>();
+}
+```
+
+Looking good! Now we'll use our DI framework of choice that supports open generics
+to wire our interface up.  Once that's done querying will look something along the lines of
+
+```c#
+await _repository.Query<Blogs>().FirstAsync(i => i.Id = 123);
+```
+
+Two steps back, zero steps forward so far. But this is just the base. Let's solve some pain points.
+
+## Problem One - Tagging
+
+A feature gone unnoticed for many with EF Core 2.2 was the addition of
+[Query tags](https://docs.microsoft.com/en-us/ef/core/querying/tags). This
+allows us to include a comment in the generated SQL. This may not seem
+like a huge deal, but once our code makes it to production and our SQL DBA
+is sending you questions on some costly query that's showing up in the
+Query Store we can use the information included in this tag to track down the
+problematic code.
+
+Given this linq query
+
+```c#
+var context = new BlogContext();
+var blogs = await context.Blogs
+    .TagWith("Querying all blogs")
+    .ToListAsync();
+```
+
+With our tag this is the SQL that is executed.
+
+``` sql
+-- Querying all blogs
+
+SELECT "b"."BlogId", "b"."Url"
+FROM "Blogs" AS "b"
+```
+
+It's important to remember that this is what's sent to the server. That means it is what will show up a trace session or the query store. Definitely helpful when you start seeing large queries that could come from anywhere in the app. That is if we remembered to include it.
+
+So, let's include a tag automatically.
+
+While it's nice to have some text in there what if we included the method name and filename? We can rely on a little compiler magic and add that to our repository. 
+
+```c#
+public IQueryable<T> Query<T>(
+    [System.Runtime.CompilerServices.CallerMemberName]
+    string memberName = "",
+    [System.Runtime.CompilerServices.CallerFilePath]
+    string sourceFilePath = "",
+    [System.Runtime.CompilerServices.CallerLineNumber]
+    int sourceLineNumber = 0) where T : class
+{
+    return _context.Set<T>()
+        .TagWith($"{memberName} {sourceFilePath}:{sourceLineNumber}");
+}
+```
+
+Our new `Query` method now takes 3 optional parameter marked with [caller information](https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/attributes/caller-information). If you aren't familiar with these attributes the compiler will automatically populate those fields with the appropriate values. Keep in mind that they are populated by the compiler and not at runtime so there won't be a performance penality. One gotcha here is we need to make sure our interface also has the same attributes. Without both the interface and implementation having the interfaces you'll get the default values.
+
+Now when we rerun our our original LINQ query, we generated SQL somewhat like the following
+
+```sql
+-- Can_query() C:\projects\repo\RepositoryTests.cs:42
+
+SELECT "b"."BlogId", "b"."Url"
+FROM "Blogs" AS "b"
+WHERE "b"."BlogId" = 123
+LIMIT 1
+```
+
+With this change we now automatically get all our queries tagged with their source. `TagWith()` can be chained too, allowing us to still provide extra details when the need arises.
+
+```c#
+var first = await repository.Query(i => i.Blogs)
+    .TagWith("Querying blog 123")
+    .FirstOrDefaultAsync(i => i.BlogId == 123);
+```
+
+produces
+
+```sql
+-- Can_query() C:\projects\repo\RepositoryTests.cs:42
+
+-- Querying blog 123
+
+SELECT "b"."BlogId", "b"."Url"
+FROM "Blogs" AS "b"
+WHERE "b"."BlogId" = 123
+LIMIT 1
+```
+
+## Problem 2 - Commands and Queries
+
+[Command Query Responsibility Segregation](https://martinfowler.com/bliki/CQRS.html) (CQRS) isn't new, but it has seen a rise in popularity of late. If you aren't familiar with it, I'll leave getting into the weeds of that pattern for someone else. For our purposes we'll stick to a super simple idea that it's useful if we have different code path for when doing queries and commands. One way I like to enforce this is with two repositories - a command and a query repository. 
+
+For our purposes we'll split `IRepository<T>` into `ICommandRepository<T>` and `IQueryRepository<T>`. Query repository stays the same with just a `Query` method. That's all it needs. We won't be updating the data when issueing our queries so no need for anything else. Our command repository we'll add a simple `SaveChangesAsync()` and `Set<T>` for working directly with the `DbSet` and persisting the data.
+
+```c#
+public Task SaveChangesAsync() => _context.SaveChangesAsync();
+public DbSet<T> Set<T>() where T : class => _context.Set<T>();
+```
+
+No tagging here, unfortunately, so our implementation is dead simple. Now our code to create and persist an item would look something like this
+
+```c#
+var blog = new Blog()
+{
+    Url = "http://example.com/rss.xml",
+    BlogId = 123
+};
+
+await commandRepository.Set(i => i.Blogs).AddAsync(blog);
+await commandRepository.SaveChangesAsync();
+```
+
+Not a ton of value being added, even though it is nice having two implementations that are explicit on their use. But there is one EF detail that we can include in our query repostiory. Our `QueryRepository` will never return data that will be used for updates in a `DbContext`. We don't even have a method to persist it if we wanted. With EF when you are querying data it makes sense to also call `AsNoTracking()`. By default, [EF will include tracking details](https://docs.microsoft.com/en-us/ef/core/querying/tracking) when we query. This data can become quite combersome over time and introduces a performance penality when all we want is read-only data. When we are using our `QueryRepository` that is precisely what we are doing so let's include it. Now our implementation while simple is providing a much better foundation for queries.
+
+```c#
+public IQueryable<T> Query<T>(
+    [System.Runtime.CompilerServices.CallerMemberName] 
+    string memberName = "", 
+    [System.Runtime.CompilerServices.CallerFilePath]
+    string sourceFilePath = "", 
+    [System.Runtime.CompilerServices.CallerLineNumber]
+    int sourceLineNumber = 0) where T : class
+{
+    return _context.Set<T>()
+        .AsNoTracking()
+        .TagWith($"{memberName}() {sourceFilePath}:{sourceLineNumber}");
+}
+```
+
+## Pros and Cons
+
+This pattern isn't for everyone, but if you are working in a CQRS solution you may find value
+
+### Pros
+
+* Automatic tagging of all queries with member name, source file and line number for debugging in SQL tools
+* Automatic disabling of tracking information in code paths that are query only
+* No temptation to include commands in query only code path. You must be explicit with the command repository.
+* Command repositories have enforced standard code paths. E.g. without adding `Add` method to the repository interface developers will need to be consistent and use the `DbSet` implementation. 
+
+### Cons
+
+* As you need more functionality exposed from the `DbContext` you may find yourself expanding out the interfaces. Ideally you can leave these two interfaces slim and add new services when needing to work with underlying `DbContext` details.
+* You look like a crazy person for wrapping a perfectly good repository pattern with something that's really only 
+
