@@ -168,13 +168,16 @@ This pattern isn't for everyone, but if you are working in a CQRS solution you m
 
 ### Pros
 
-* Automatic tagging of all queries with member name, source file and line number for debugging in SQL tools
+* Automatic tagging of all queries with member name, source file and line number for debugging in SQL tools.
 * Automatic disabling of tracking information in code paths that are query only
 * No temptation to include commands in query only code path. You must be explicit with the command repository.
-* Command repositories have enforced standard code paths. E.g. without adding `Add` method to the repository interface developers will need to be consistent and use the `DbSet` implementation. 
+* Command repositories have enforced standard code paths. E.g. without adding `Add` method to the repository interface developers will need to be consistent and use the `DbSet` implementation.
 
 ### Cons
 
 * As you need more functionality exposed from the `DbContext` you may find yourself expanding out the interfaces. Ideally you can leave these two interfaces slim and add new services when needing to work with underlying `DbContext` details.
-* You look like a crazy person for wrapping a perfectly good repository pattern with something that's really only 
+* You look like a crazy person for wrapping a perfectly good repository pattern.
 
+## Example Code Notes
+
+The code in the repository is configured using Lamar as a container with a Sqlite backend to demonstrate what would be closer to real world usage. It also expands upon the repositories to include a `Set` and `Query` method that accept a lambda to allow code such as `Query(i => i.Blogs)` for better discoverability of the context's `DbSet` members. 
