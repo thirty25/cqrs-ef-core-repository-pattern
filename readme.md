@@ -5,7 +5,7 @@ Chances are the only reason you clicked on this article was to scroll right
 to the comments so you can call me an idiot. "`DbSet` IS a repository!" you
 are here to tell me. Well yes. But maybe, just maybe, we can have a bit of a better
 repository. We'll leave all the functionality on the existing `DbSet` and
-expose it direction. Our main work will be wrapping up our `DbContext`
+expose it directly. Our main work will be wrapping up our `DbContext` and adding a little extra to make things a bit easier when working in a CQRS architecture.
 
 ## Setting Up A Useless Repository
 
@@ -58,7 +58,7 @@ var blogs = await context.Blogs
     .ToListAsync();
 ```
 
-With our tag this is the SQL that is executed.
+With this is the SQL that is executed with our tag
 
 ``` sql
 -- Querying all blogs
@@ -67,11 +67,11 @@ SELECT "b"."BlogId", "b"."Url"
 FROM "Blogs" AS "b"
 ```
 
-It's important to remember that this is what's sent to the server. That means it is what will show up a trace session or the query store. Definitely helpful when you start seeing large queries that could come from anywhere in the app. That is if we remembered to include it.
+It's important to remember that this is what's sent to the server. That means it is what will show up a trace session or the query store. These tags are helpful when you start seeing expensive queries that could come from anywhere in the app. Well, that is if we remembered to include it.
 
-So, let's include a tag automatically.
+So, let's include it automatically.
 
-While it's nice to have some text in there what if we included the method name and filename? We can rely on a little compiler magic and add that to our repository. 
+While it's nice to have some text in there what if we included the method name and filename? We can rely on a little compiler magic and add that to our repository.
 
 ```c#
 public IQueryable<T> Query<T>(
@@ -123,7 +123,7 @@ LIMIT 1
 
 ## Problem 2 - Commands and Queries
 
-[Command Query Responsibility Segregation](https://martinfowler.com/bliki/CQRS.html) (CQRS) isn't new, but it has seen a rise in popularity of late. If you aren't familiar with it, I'll leave getting into the weeds of that pattern for someone else. For our purposes we'll stick to a super simple idea that it's useful if we have different code path for when doing queries and commands. One way I like to enforce this is with two repositories - a command and a query repository. 
+[Command Query Responsibility Segregation](https://martinfowler.com/bliki/CQRS.html) (CQRS) isn't new, but it has seen a rise in popularity of late. If you aren't familiar with it, I'll leave getting into the weeds of that pattern for someone else. For our purposes we'll stick to a super simple idea that an architecture with different code path for when doing queries and commands is sometimes useful. One way I like to enforce this is with two repositories - a command and a query repository.
 
 For our purposes we'll split `IRepository<T>` into `ICommandRepository<T>` and `IQueryRepository<T>`. Query repository stays the same with just a `Query` method. That's all it needs. We won't be updating the data when issueing our queries so no need for anything else. Our command repository we'll add a simple `SaveChangesAsync()` and `Set<T>` for working directly with the `DbSet` and persisting the data.
 
@@ -132,7 +132,7 @@ public Task SaveChangesAsync() => _context.SaveChangesAsync();
 public DbSet<T> Set<T>() where T : class => _context.Set<T>();
 ```
 
-No tagging here, unfortunately, so our implementation is dead simple. Now our code to create and persist an item would look something like this
+Save changes doesn't allow tagging, unfortunately, so our implementation is dead simple. Now our code to create and persist an item would look something like this
 
 ```c#
 var blog = new Blog()
@@ -141,7 +141,7 @@ var blog = new Blog()
     BlogId = 123
 };
 
-await commandRepository.Set(i => i.Blogs).AddAsync(blog);
+await commandRepository.Set<Blog>.AddAsync(blog);
 await commandRepository.SaveChangesAsync();
 ```
 
@@ -149,10 +149,10 @@ Not a ton of value being added, even though it is nice having two implementation
 
 ```c#
 public IQueryable<T> Query<T>(
-    [System.Runtime.CompilerServices.CallerMemberName] 
-    string memberName = "", 
+    [System.Runtime.CompilerServices.CallerMemberName]
+    string memberName = "",
     [System.Runtime.CompilerServices.CallerFilePath]
-    string sourceFilePath = "", 
+    string sourceFilePath = "",
     [System.Runtime.CompilerServices.CallerLineNumber]
     int sourceLineNumber = 0) where T : class
 {
@@ -164,20 +164,22 @@ public IQueryable<T> Query<T>(
 
 ## Pros and Cons
 
-This pattern isn't for everyone, but if you are working in a CQRS solution you may find value
+Obviously this usage isn't for everyone. But I find by restricting the surface of `DbContext` on commands plus enhancing `IQueryable` with our tags and automatic `AsNoTracking` it produces more consistent code.
 
 ### Pros
 
 * Automatic tagging of all queries with member name, source file and line number for debugging in SQL tools.
-* Automatic disabling of tracking information in code paths that are query only
+* Automatic disabling of tracking information in code paths that are query only.
 * No temptation to include commands in query only code path. You must be explicit with the command repository.
 * Command repositories have enforced standard code paths. E.g. without adding `Add` method to the repository interface developers will need to be consistent and use the `DbSet` implementation.
+* We aren't hiding `DbSet` or `IQueryable` allowing the devs to work with EF in an optimal fashion and not have to write a ton of boiler plate `Get`, `GetAll`, `GetById`, etc implementations of your typical `IRepository` implementation around EF.
 
 ### Cons
 
 * As you need more functionality exposed from the `DbContext` you may find yourself expanding out the interfaces. Ideally you can leave these two interfaces slim and add new services when needing to work with underlying `DbContext` details.
+* If you are used to using `IRepository` because it makes mocking your data access easier than mocking out EF's objects this won't help you as you'll still need to mock `DbSet`.
 * You look like a crazy person for wrapping a perfectly good repository pattern.
 
 ## Example Code Notes
 
-The code in the repository is configured using Lamar as a container with a Sqlite backend to demonstrate what would be closer to real world usage. It also expands upon the repositories to include a `Set` and `Query` method that accept a lambda to allow code such as `Query(i => i.Blogs)` for better discoverability of the context's `DbSet` members. 
+The code in the repository is configured using Lamar as a container with a SQLite backend to demonstrate what would be closer to real world usage. It also expands upon the repositories to include a `Set` and `Query` method that accept a lambda to allow code such as `Query(i => i.Blogs)` for better discoverability of the context's `DbSet` members.
