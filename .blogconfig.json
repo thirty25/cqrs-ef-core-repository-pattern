@@ -6,12 +6,10 @@
       "Repository Pattern",
       "Bad Ideas"
     ],
-    "nuget": {
-      "projectFiles": [
-        "src/RepositoryPattern.Data"
-      ],
-      "packages": [
-        "Microsoft.EntityFrameworkCore"
+    "nugetPackages": [
+        {
+          "Name": "Microsoft.EntityFrameworkCore",
+          "Version": "3.x"
+        }
       ]
-    }
   }
