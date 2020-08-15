@@ -1,0 +1,17 @@
+{
+    "title": "A CQRS IRepository with EF Core",
+    "abstract": "If you are gonna have a repository with EF Core we might as well do it right.",
+    "tags": [
+      "EFCore",
+      "Repository Pattern",
+      "Bad Ideas"
+    ],
+    "nuget": {
+      "projectFiles": [
+        "src/RepositoryPattern.Data"
+      ],
+      "packages": [
+        "Microsoft.EntityFrameworkCore"
+      ]
+    }
+  }
