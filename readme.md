@@ -1,5 +1,5 @@
 
-# A CQRS IRepository with EF Core
+# A CQRS Repository with EF Core
 
 Chances are the only reason you clicked on this article was to scroll right
 to the comments so you can call me an idiot. "`DbSet` IS a repository!" you
