@@ -1,4 +1,3 @@
-
 # A CQRS Repository with EF Core
 
 Chances are the only reason you clicked on this article was to scroll right
